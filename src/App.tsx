@@ -184,7 +184,7 @@ export default function App() {
       day: "Mon",
       sessions: removeMon
         ? []
-        : [
+        : ([
             {
               type: "Run",
               subtype: "Easy",
@@ -196,10 +196,10 @@ export default function App() {
                     type: "Bike",
                     subtype: "Endurance",
                     distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
-                  },
+                  } as Session,
                 ]
               : []),
-          ],
+          ] as Session[]),
     });
 
     // Tuesday (SubT + WU/CD)
@@ -219,10 +219,10 @@ export default function App() {
                 type: "Bike",
                 subtype: "SubT",
                 distOrTime: `${bikeSubTPerDayH.toFixed(1)} h`,
-              },
+              } as Session,
             ]
           : []),
-      ],
+      ] as Session[],
     });
 
     // Wednesday
@@ -240,10 +240,10 @@ export default function App() {
                 type: "Bike",
                 subtype: "Endurance",
                 distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
-              },
+              } as Session,
             ]
           : []),
-      ],
+      ] as Session[],
     });
 
     // Thursday (SubT + WU/CD)
@@ -263,10 +263,10 @@ export default function App() {
                 type: "Bike",
                 subtype: "SubT",
                 distOrTime: `${bikeSubTPerDayH.toFixed(1)} h`,
-              },
+              } as Session,
             ]
           : []),
-      ],
+      ] as Session[],
     });
 
     // Friday
@@ -327,10 +327,10 @@ export default function App() {
                 type: "Bike",
                 subtype: "Endurance",
                 distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
-              },
+              } as Session,
             ]
           : []),
-      ],
+      ] as Session[],
     });
 
     return days;

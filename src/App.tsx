@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -12,7 +12,7 @@ import {
 type Session = {
   type: "Run" | "Bike";
   subtype: string;
-  distOrTime: string;
+  distOrTime: string; // "X km" or "Y h"
 };
 
 type DayPlan = {
@@ -20,33 +20,84 @@ type DayPlan = {
   sessions: Session[];
 };
 
+type ZonePacesNum = {
+  easy: number; // min/km
+  subT: number; // min/km
+  hi: number; // min/km
+};
+
+type ZonePercentages = {
+  easy: number; // %
+  subT: number; // %
+  hi: number; // %
+};
+
 export default function App() {
-  const [weeklyMiles, setWeeklyMiles] = useState<number>(60);
-  const [enableCycling, setEnableCycling] = useState<boolean>(false);
-  const [cyclingHours, setCyclingHours] = useState<number>(0);
-  const [removeMon, setRemoveMon] = useState<boolean>(false);
-  const [removeFri, setRemoveFri] = useState<boolean>(false);
-  const [satHighIntensity, setSatHighIntensity] = useState<boolean>(false);
-  const [raceDistance, setRaceDistance] = useState<number>(10); // km
+  // --- Core inputs ---
+  const [weeklyMileage, setWeeklyMileage] = useState<number>(60);
+
+  // Race / VDOT inputs (Box 1)
+  const [raceDistance, setRaceDistance] = useState<number>(10);
   const [raceTime, setRaceTime] = useState<string>("40:00");
   const [vdot, setVdot] = useState<number | null>(null);
-  const [paces, setPaces] = useState<{
-    easy: string;
-    subT: string;
-    hi?: string;
-  }>({
-    easy: "",
-    subT: "",
+
+  // Numeric paces used for calculations (min/km)
+  const [pacesNum, setPacesNum] = useState<ZonePacesNum>({
+    easy: 5.0,
+    subT: 4.0,
+    hi: 3.5,
   });
 
-  // --- Helper: format pace as MM:SS ---
+  // Display paces as strings (MM:SS)
+  const [pacesStr, setPacesStr] = useState<{
+    easy: string;
+    subT: string;
+    hi: string;
+  }>({
+    easy: "5:00 min/km",
+    subT: "4:00 min/km",
+    hi: "3:30 min/km",
+  });
+
+  // --- Toggles / Advanced ---
+  const [satHighIntensity, setSatHighIntensity] = useState<boolean>(false);
+  const [advancedOptions, setAdvancedOptions] = useState<boolean>(false);
+  const [removeMon, setRemoveMon] = useState<boolean>(false);
+  const [removeFri, setRemoveFri] = useState<boolean>(false);
+
+  // Cycling (inside Advanced)
+  const [enableCycling, setEnableCycling] = useState<boolean>(false);
+  const [cyclingHours, setCyclingHours] = useState<number>(0);
+
+  // Zone % distribution (time basis)
+  const [percentages, setPercentages] = useState<ZonePercentages>({
+    easy: 75,
+    subT: 25,
+    hi: 0,
+  });
+
+  // If HI is toggled, auto-set 75/18/7; otherwise 75/25/0 (still editable in Advanced)
+  useEffect(() => {
+    if (satHighIntensity) {
+      setPercentages({ easy: 75, subT: 18, hi: 7 });
+    } else {
+      setPercentages({ easy: 75, subT: 25, hi: 0 });
+    }
+  }, [satHighIntensity]);
+
+  // --- Helpers ---
   const formatPace = (minPerKm: number): string => {
     const minutes = Math.floor(minPerKm);
-    const seconds = Math.round((minPerKm - minutes) * 60);
+    let seconds = Math.round((minPerKm - minutes) * 60);
+    if (seconds === 60) {
+      // handle rounding edge cases like 3:59.6 -> 4:00
+      seconds = 0;
+      return `${minutes + 1}:00 min/km`;
+    }
     return `${minutes}:${seconds.toString().padStart(2, "0")} min/km`;
   };
 
-  // --- VDOT calculator (simplified placeholder) ---
+  // --- VDOT calculator (simplified placeholder as requested) ---
   const calculateVdot = () => {
     const [minStr, secStr] = raceTime.split(":");
     const min = parseInt(minStr, 10) || 0;
@@ -62,54 +113,74 @@ export default function App() {
     const hiMinPerKm = 5 / (v / 10);
 
     setVdot(estVDOT);
-    setPaces({
+    setPacesNum({
+      easy: easyMinPerKm,
+      subT: subTMinPerKm,
+      hi: hiMinPerKm,
+    });
+    setPacesStr({
       easy: formatPace(easyMinPerKm),
       subT: formatPace(subTMinPerKm),
       hi: formatPace(hiMinPerKm),
     });
   };
 
-  // --- Weekly Plan Generator ---
-  const generatePlan = (): DayPlan[] => {
-    const warmupCooldownPerSession = 4; // 2 km warmup + 2 km cooldown
-    const subTWorkShare = 0.25; // 25% weekly mileage
-    const hiWorkShare = satHighIntensity ? 0.07 : 0; // 7% HI if enabled
+  // --- Zone time allocation (time basis) ---
+  const zones = useMemo(() => {
+    // total time baseline estimated from weekly mileage run at easy pace
+    const totalTimeMin = weeklyMileage * pacesNum.easy; // minutes
+    const easyTime = (totalTimeMin * percentages.easy) / 100;
+    const subTTime = (totalTimeMin * percentages.subT) / 100;
+    const hiTime = (totalTimeMin * percentages.hi) / 100;
 
-    // allocate blocks
-    const totalSubTWork = weeklyMiles * subTWorkShare;
-    const subTBlock = totalSubTWork / 2; // always Tue + Thu
+    // Distances from time and zone pace
+    const easyDist = easyTime / pacesNum.easy;
+    const subTDist = subTTime / pacesNum.subT;
+    const hiDist = hiTime / pacesNum.hi;
 
-    const hiVolume = weeklyMiles * hiWorkShare; // Saturday HI
+    return {
+      totalTimeMin,
+      easy: { timeMin: easyTime, distKm: easyDist },
+      subT: { timeMin: subTTime, distKm: subTDist },
+      hi: { timeMin: hiTime, distKm: hiDist },
+    };
+  }, [weeklyMileage, percentages, pacesNum]);
 
-    const totalWarmupCooldown =
-      warmupCooldownPerSession * (2 + (satHighIntensity ? 1 : 0));
+  // --- Weekly plan generation ---
+  const plan: DayPlan[] = useMemo(() => {
+    // SubT days: Tue, Thu always. Saturday is SubT if HI is off; HI if on.
+    const numSubTDays = satHighIntensity ? 2 : 3;
+    const subTDistPerDay = zones.subT.distKm / Math.max(1, numSubTDays);
 
-    // Easy mileage fills the rest
-    const easyMileage =
-      weeklyMiles - totalSubTWork - hiVolume - totalWarmupCooldown;
+    // Warmup + cooldown per intensity session
+    const warmupCooldownPerSessionKm = 4; // 2 km warmup + 2 km cooldown
+    const numIntensitySessions = satHighIntensity ? 3 : 3; // Tue, Thu, and Sat (either SubT or HI) are intensity days
+    const totalWUCDKm = warmupCooldownPerSessionKm * numIntensitySessions;
 
-    // Easy days count (Mon, Wed, Fri, Sun)
+    // The Easy bucket must also cover all warmup/cooldown.
+    const freeEasyDistKm = Math.max(0, zones.easy.distKm - totalWUCDKm);
+
+    // Easy day allocation across Mon, Wed, Fri, Sun (Sun is 1.5x)
     let easyDayCount = 4;
     if (removeMon) easyDayCount--;
     if (removeFri) easyDayCount--;
-
-    const easyBlock = easyMileage / (easyDayCount + 0.5); // Sun = 1.5x
+    const denom = easyDayCount + 0.5; // Sun weight = 1.5
+    const easyBlock = denom > 0 ? freeEasyDistKm / denom : 0;
     const longRun = easyBlock * 1.5;
 
-    // Cycling split
-    const bikeSubTBlock =
-      enableCycling && cyclingHours > 0
-        ? ((cyclingHours * 0.25) / 3).toFixed(1)
-        : null;
-    const bikeEasyBlock =
-      enableCycling && cyclingHours > 0
-        ? ((cyclingHours * 0.75) / (3 - (removeMon ? 1 : 0))).toFixed(1)
-        : null;
+    // Saturday HI distance
+    const hiDist = zones.hi.distKm;
 
-    const plan: DayPlan[] = [];
+    // Cycling distribution (Mon/Wed/Sun Endurance, Tue/Thu SubT, never Fri)
+    const bikeEndurancePerDayH =
+      enableCycling && cyclingHours > 0 ? (cyclingHours * 0.75) / 3 : 0;
+    const bikeSubTPerDayH =
+      enableCycling && cyclingHours > 0 ? (cyclingHours * 0.25) / 2 : 0;
+
+    const days: DayPlan[] = [];
 
     // Monday
-    plan.push({
+    days.push({
       day: "Mon",
       sessions: removeMon
         ? []
@@ -119,35 +190,35 @@ export default function App() {
               subtype: "Easy",
               distOrTime: `${easyBlock.toFixed(1)} km`,
             },
-            ...(bikeEasyBlock
+            ...(enableCycling && bikeEndurancePerDayH > 0
               ? [
                   {
                     type: "Bike",
                     subtype: "Endurance",
-                    distOrTime: `${bikeEasyBlock} h`,
+                    distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
                   },
                 ]
               : []),
           ],
     });
 
-    // Tuesday (SubT)
-    plan.push({
+    // Tuesday (SubT + WU/CD)
+    days.push({
       day: "Tue",
       sessions: [
         { type: "Run", subtype: "Warmup", distOrTime: "2 km" },
         {
           type: "Run",
           subtype: "SubT",
-          distOrTime: `${subTBlock.toFixed(1)} km`,
+          distOrTime: `${subTDistPerDay.toFixed(1)} km`,
         },
         { type: "Run", subtype: "Cooldown", distOrTime: "2 km" },
-        ...(bikeSubTBlock
+        ...(enableCycling && bikeSubTPerDayH > 0
           ? [
               {
                 type: "Bike",
                 subtype: "SubT",
-                distOrTime: `${bikeSubTBlock} h`,
+                distOrTime: `${bikeSubTPerDayH.toFixed(1)} h`,
               },
             ]
           : []),
@@ -155,7 +226,7 @@ export default function App() {
     });
 
     // Wednesday
-    plan.push({
+    days.push({
       day: "Wed",
       sessions: [
         {
@@ -163,35 +234,35 @@ export default function App() {
           subtype: "Easy",
           distOrTime: `${easyBlock.toFixed(1)} km`,
         },
-        ...(bikeEasyBlock
+        ...(enableCycling && bikeEndurancePerDayH > 0
           ? [
               {
                 type: "Bike",
                 subtype: "Endurance",
-                distOrTime: `${bikeEasyBlock} h`,
+                distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
               },
             ]
           : []),
       ],
     });
 
-    // Thursday (SubT)
-    plan.push({
+    // Thursday (SubT + WU/CD)
+    days.push({
       day: "Thu",
       sessions: [
         { type: "Run", subtype: "Warmup", distOrTime: "2 km" },
         {
           type: "Run",
           subtype: "SubT",
-          distOrTime: `${subTBlock.toFixed(1)} km`,
+          distOrTime: `${subTDistPerDay.toFixed(1)} km`,
         },
         { type: "Run", subtype: "Cooldown", distOrTime: "2 km" },
-        ...(bikeSubTBlock
+        ...(enableCycling && bikeSubTPerDayH > 0
           ? [
               {
                 type: "Bike",
                 subtype: "SubT",
-                distOrTime: `${bikeSubTBlock} h`,
+                distOrTime: `${bikeSubTPerDayH.toFixed(1)} h`,
               },
             ]
           : []),
@@ -199,7 +270,7 @@ export default function App() {
     });
 
     // Friday
-    plan.push({
+    days.push({
       day: "Fri",
       sessions: removeFri
         ? []
@@ -212,46 +283,37 @@ export default function App() {
           ],
     });
 
-    // Saturday
+    // Saturday (SubT + WU/CD) OR (HI + WU/CD)
     if (satHighIntensity) {
-      plan.push({
+      days.push({
         day: "Sat",
         sessions: [
           { type: "Run", subtype: "Warmup", distOrTime: "2 km" },
           {
             type: "Run",
             subtype: "High Intensity",
-            distOrTime: `${hiVolume.toFixed(1)} km`,
+            distOrTime: `${hiDist.toFixed(1)} km`,
           },
           { type: "Run", subtype: "Cooldown", distOrTime: "2 km" },
         ],
       });
     } else {
-      plan.push({
+      days.push({
         day: "Sat",
         sessions: [
           { type: "Run", subtype: "Warmup", distOrTime: "2 km" },
           {
             type: "Run",
             subtype: "SubT",
-            distOrTime: `${subTBlock.toFixed(1)} km`,
+            distOrTime: `${subTDistPerDay.toFixed(1)} km`,
           },
           { type: "Run", subtype: "Cooldown", distOrTime: "2 km" },
-          ...(bikeSubTBlock
-            ? [
-                {
-                  type: "Bike",
-                  subtype: "SubT",
-                  distOrTime: `${bikeSubTBlock} h`,
-                },
-              ]
-            : []),
         ],
       });
     }
 
     // Sunday
-    plan.push({
+    days.push({
       day: "Sun",
       sessions: [
         {
@@ -259,136 +321,118 @@ export default function App() {
           subtype: "Long Run",
           distOrTime: `${longRun.toFixed(1)} km`,
         },
-        ...(bikeEasyBlock
+        ...(enableCycling && bikeEndurancePerDayH > 0
           ? [
               {
                 type: "Bike",
                 subtype: "Endurance",
-                distOrTime: `${bikeEasyBlock} h`,
+                distOrTime: `${bikeEndurancePerDayH.toFixed(1)} h`,
               },
             ]
           : []),
       ],
     });
 
-    return plan;
-  };
+    return days;
+  }, [
+    zones.easy.distKm,
+    zones.subT.distKm,
+    zones.hi.distKm,
+    satHighIntensity,
+    enableCycling,
+    cyclingHours,
+    removeMon,
+    removeFri,
+  ]);
 
-  const plan: DayPlan[] = generatePlan();
+  // --- Aggregates for chart and summary ---
+  const chartData = useMemo(() => {
+    const arr: { name: string; hours: number }[] = [
+      { name: "Run Easy", hours: zones.easy.timeMin / 60 },
+      { name: "Run SubT", hours: zones.subT.timeMin / 60 },
+    ];
+    if (satHighIntensity && zones.hi.timeMin > 0) {
+      arr.push({ name: "Run HI", hours: zones.hi.timeMin / 60 });
+    }
+    if (enableCycling && cyclingHours > 0) {
+      arr.push({ name: "Bike Endurance", hours: cyclingHours * 0.75 });
+      arr.push({ name: "Bike SubT", hours: cyclingHours * 0.25 });
+    }
+    return arr;
+  }, [zones, satHighIntensity, enableCycling, cyclingHours]);
 
-  // --- Aggregated Data for Graph + Summary ---
-  const aggregateData = () => {
+  // Totals (numeric) for summary
+  const totals = useMemo(() => {
+    // Sum run km by parsing plan items
     let runEasyKm = 0;
     let runSubTKm = 0;
     let runHiKm = 0;
-    let bikeEnduranceH = 0;
-    let bikeSubTH = 0;
 
-    const kmToHours = (km: number) => km / 12;
-
-    plan.forEach((day) => {
-      day.sessions.forEach((s) => {
-        const value = parseFloat(s.distOrTime);
+    plan.forEach((d) => {
+      d.sessions.forEach((s) => {
         if (s.type === "Run") {
+          const val = parseFloat(s.distOrTime);
           if (["Easy", "Long Run", "Warmup", "Cooldown"].includes(s.subtype)) {
-            runEasyKm += value;
+            runEasyKm += val;
           } else if (s.subtype === "SubT") {
-            runSubTKm += value;
+            runSubTKm += val;
           } else if (s.subtype === "High Intensity") {
-            runHiKm += value;
+            runHiKm += val;
           }
-        } else if (s.type === "Bike") {
-          if (s.subtype === "Endurance") bikeEnduranceH += value;
-          else if (s.subtype === "SubT") bikeSubTH += value;
         }
       });
     });
 
-    const chart: { name: string; hours: number }[] = [
-      { name: "Run Easy", hours: kmToHours(runEasyKm) },
-      { name: "Run SubT", hours: kmToHours(runSubTKm) },
-    ];
-    if (runHiKm > 0) {
-      chart.push({ name: "Run High Intensity", hours: kmToHours(runHiKm) });
-    }
-    if (enableCycling) {
-      chart.push({ name: "Bike Endurance", hours: bikeEnduranceH });
-      chart.push({ name: "Bike SubT", hours: bikeSubTH });
-    }
+    const bikeEnduranceH = enableCycling ? cyclingHours * 0.75 : 0;
+    const bikeSubTH = enableCycling ? cyclingHours * 0.25 : 0;
 
     return {
-      chart,
-      totals: {
-        runKm: runEasyKm + runSubTKm + runHiKm,
-        runEasyKm,
-        runSubTKm,
-        runHiKm,
-        bikeHours: bikeEnduranceH + bikeSubTH,
-        bikeEnduranceH,
-        bikeSubTH,
-      },
+      runKm: runEasyKm + runSubTKm + runHiKm,
+      runEasyKm,
+      runSubTKm,
+      runHiKm,
+      bikeHours: bikeEnduranceH + bikeSubTH,
+      bikeEnduranceH,
+      bikeSubTH,
+      totalTimeH: zones.totalTimeMin / 60 + (enableCycling ? cyclingHours : 0),
     };
-  };
-
-  const { chart: chartData, totals } = aggregateData();
+  }, [plan, enableCycling, cyclingHours, zones.totalTimeMin]);
 
   return (
     <div className="min-h-screen p-6 bg-gray-50">
       <h1 className="text-3xl font-bold mb-2">Norwegian Singles Planner</h1>
       <p className="text-m font-bold mb-2">
-        Inspired by Norwegian Singles method.
+        Inspired by Norwegian Singles method{" "}
+        <a
+          href="https://norwegiansingles.run/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800"
+        >
+          Learn more here
+        </a>
+        .
       </p>
-      <a
-        href="https://scientifictriathlon.com/tts282-the-norwegian-training-methods-with-olav-alexander-bu/"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-blue-600 underline hover:text-blue-800 mb-6 inline-block"
-      >
-        Learn more here
-      </a>
+      <p className="text-m font-bold mb-2">
+        Created by{" "}
+        <a
+          href="https://www.linusjern.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800"
+        >
+          Linus Jern
+        </a>
+        .
+      </p>
 
-      {/* Inputs */}
+      {/* ===== Box 1: VDOT & Paces ===== */}
       <div className="bg-white rounded-2xl shadow p-4 mb-6 space-y-4">
-        <div className="grid md:grid-cols-2 gap-4">
+        <h2 className="text-lg font-semibold">VDOT Calculator</h2>
+        <div className="grid md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium">
-              Weekly Run Goal (km)
-            </label>
-            <input
-              type="number"
-              value={weeklyMiles}
-              onChange={(e) => setWeeklyMiles(Number(e.target.value))}
-              className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              id="enableCycling"
-              type="checkbox"
-              checked={enableCycling}
-              onChange={() => setEnableCycling(!enableCycling)}
-              className="h-4 w-4"
-            />
-            <label htmlFor="enableCycling" className="text-sm font-medium">
-              Add Cycling
-            </label>
-          </div>
-          {enableCycling && (
-            <div>
-              <label className="block text-sm font-medium">
-                Weekly Cycling Goal (hours)
-              </label>
-              <input
-                type="number"
-                value={cyclingHours}
-                onChange={(e) => setCyclingHours(Number(e.target.value))}
-                className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
-              />
-            </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium">
-              Race Distance (km)
+              Race distance (km)
             </label>
             <input
               type="number"
@@ -399,7 +443,7 @@ export default function App() {
           </div>
           <div>
             <label className="block text-sm font-medium">
-              Race Time (MM:SS)
+              Race time (MM:SS)
             </label>
             <input
               value={raceTime}
@@ -407,53 +451,171 @@ export default function App() {
               className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
             />
           </div>
+          <div className="flex items-end">
+            <button
+              onClick={calculateVdot}
+              className="w-full rounded-lg bg-blue-600 px-4 py-2 text-white shadow hover:bg-blue-700"
+            >
+              Calculate VDOT & Paces
+            </button>
+          </div>
+        </div>
+        {vdot !== null && (
+          <div className="grid md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <b>VDOT:</b> {vdot}
+            </div>
+            <div>
+              <b>Easy:</b> {pacesStr.easy}
+            </div>
+            <div>
+              <b>SubT:</b> {pacesStr.subT}
+            </div>
+            <div>
+              <b>HI:</b> {pacesStr.hi}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ===== Box 2: Plan Inputs (basic) ===== */}
+      <div className="bg-white rounded-2xl shadow p-4 mb-6 space-y-3">
+        <h2 className="text-lg font-semibold">Plan Inputs</h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium">
+              Weekly run goal (km)
+            </label>
+            <input
+              type="number"
+              value={weeklyMileage}
+              onChange={(e) => setWeeklyMileage(Number(e.target.value))}
+              className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
+            />
+          </div>
+
+          <div className="flex items-end">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={satHighIntensity}
+                onChange={() => setSatHighIntensity(!satHighIntensity)}
+                className="h-4 w-4"
+              />
+              Saturday High Intensity
+            </label>
+          </div>
+
+          <div className="flex items-end justify-start">
+            <button
+              onClick={() => setAdvancedOptions((v) => !v)}
+              className="rounded-lg bg-gray-200 px-3 py-2 text-sm hover:bg-gray-300"
+            >
+              {advancedOptions
+                ? "Hide Advanced Options"
+                : "Show Advanced Options"}
+            </button>
+          </div>
         </div>
 
-        {/* Toggles */}
-        <div className="flex gap-6 flex-wrap">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={removeMon}
-              onChange={() => setRemoveMon(!removeMon)}
-              className="h-4 w-4"
-            />
-            Remove Monday Run
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={removeFri}
-              onChange={() => setRemoveFri(!removeFri)}
-              className="h-4 w-4"
-            />
-            Remove Friday Run
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={satHighIntensity}
-              onChange={() => setSatHighIntensity(!satHighIntensity)}
-              className="h-4 w-4"
-            />
-            Saturday High Intensity
-          </label>
-        </div>
+        {/* Advanced Options */}
+        {advancedOptions && (
+          <div className="mt-3 space-y-6 border-t pt-4">
+            {/* Intensity distribution */}
+            <div>
+              <h3 className="font-semibold mb-2">
+                Intensity Distribution (by time)
+              </h3>
+              <div className="grid md:grid-cols-3 gap-4">
+                {(["easy", "subT", "hi"] as (keyof ZonePercentages)[]).map(
+                  (zone) => (
+                    <div key={zone}>
+                      <label className="block text-sm font-medium">
+                        {zone.toUpperCase()} %
+                      </label>
+                      <input
+                        type="number"
+                        value={percentages[zone]}
+                        onChange={(e) =>
+                          setPercentages({
+                            ...percentages,
+                            [zone]: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
+                      />
+                    </div>
+                  )
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Tip: Aim for totals ~100%.
+              </p>
+            </div>
 
-        <button
-          onClick={calculateVdot}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-white shadow hover:bg-blue-700"
-        >
-          Calculate VDOT & Paces
-        </button>
+            {/* Cycling Section */}
+            <div>
+              <h3 className="font-semibold mb-2">Cycling</h3>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={enableCycling}
+                  onChange={() => setEnableCycling(!enableCycling)}
+                  className="h-4 w-4"
+                />
+                Add Cycling
+              </label>
+              {enableCycling && (
+                <div className="mt-2 grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium">
+                      Weekly cycling hours
+                    </label>
+                    <input
+                      type="number"
+                      value={cyclingHours}
+                      onChange={(e) => setCyclingHours(Number(e.target.value))}
+                      className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Remove day toggles */}
+            <div>
+              <h3 className="font-semibold mb-2">Run Day Options</h3>
+              <div className="flex gap-6 flex-wrap">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={removeMon}
+                    onChange={() => setRemoveMon(!removeMon)}
+                    className="h-4 w-4"
+                  />
+                  Remove Monday Run
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={removeFri}
+                    onChange={() => setRemoveFri(!removeFri)}
+                    className="h-4 w-4"
+                  />
+                  Remove Friday Run
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Weekly Plan */}
       <h2 className="text-xl font-semibold mb-3">Weekly Plan</h2>
       <div className="flex gap-3 overflow-x-auto pb-2 mb-8">
-        {plan.map((d, i) => (
+        {plan.map((d) => (
           <div
-            key={i}
+            key={d.day}
             className="min-w-[170px] flex-shrink-0 bg-white rounded-xl shadow p-4 text-center"
           >
             <p className="font-bold mb-2">{d.day}</p>
@@ -461,13 +623,13 @@ export default function App() {
               {d.sessions.length === 0 && <p className="text-gray-400">Rest</p>}
               {d.sessions.map((s, j) => (
                 <div
-                  key={j}
+                  key={`${d.day}-${j}`}
                   className={`rounded-lg p-2 text-sm ${
                     s.type === "Run"
                       ? s.subtype === "SubT"
-                        ? "bg-orange-100 text-orange-800"
+                        ? "bg-orange-100 text-orange-800" // flipped color for SubT
                         : s.subtype === "High Intensity"
-                        ? "bg-red-100 text-red-800"
+                        ? "bg-red-100 text-red-800" // HI in red
                         : "bg-green-100 text-green-800"
                       : s.subtype === "SubT"
                       ? "bg-purple-100 text-purple-800"
@@ -498,33 +660,37 @@ export default function App() {
               />
               <Tooltip />
               <Legend />
-              <Bar dataKey="hours" fill="#2563eb" />
+              <Bar dataKey="hours" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Totals */}
+        {/* Summary */}
         <div className="bg-white rounded-xl shadow p-4 text-sm">
           <h3 className="text-lg font-semibold mb-2">Summary</h3>
+          <p>
+            <b>Total Time:</b> {totals.totalTimeH.toFixed(1)} h
+          </p>
           <p>
             <b>Total Run:</b> {totals.runKm.toFixed(1)} km
           </p>
           <ul className="ml-4 list-disc">
             <li>
               Easy: {totals.runEasyKm.toFixed(1)} km (~
-              {(totals.runEasyKm / 12).toFixed(1)} h)
+              {((totals.runEasyKm * pacesNum.easy) / 60).toFixed(1)} h)
             </li>
             <li>
               SubT: {totals.runSubTKm.toFixed(1)} km (~
-              {(totals.runSubTKm / 12).toFixed(1)} h)
+              {((totals.runSubTKm * pacesNum.subT) / 60).toFixed(1)} h)
             </li>
             {totals.runHiKm > 0 && (
               <li>
                 High Intensity: {totals.runHiKm.toFixed(1)} km (~
-                {(totals.runHiKm / 12).toFixed(1)} h)
+                {((totals.runHiKm * pacesNum.hi) / 60).toFixed(1)} h)
               </li>
             )}
           </ul>
+
           {enableCycling && (
             <>
               <p className="mt-2">
@@ -536,14 +702,13 @@ export default function App() {
               </ul>
             </>
           )}
-          {vdot && (
+
+          {vdot !== null && (
             <div className="mt-4">
-              <h4 className="font-semibold">Paces</h4>
-              <p>Easy: {paces.easy}</p>
-              <p>SubT: {paces.subT}</p>
-              {satHighIntensity && paces.hi && (
-                <p>High Intensity: {paces.hi}</p>
-              )}
+              <h4 className="font-semibold">Paces (from VDOT)</h4>
+              <p>Easy: {pacesStr.easy}</p>
+              <p>SubT: {pacesStr.subT}</p>
+              <p>HI: {pacesStr.hi}</p>
             </div>
           )}
         </div>

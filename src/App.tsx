@@ -400,7 +400,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6 bg-gray-50">
-      <h1 className="text-3xl font-bold mb-2">Norwegian Singles Planner</h1>
+      <h1 className="text-3xl font-bold mb-2">Running Training Planner</h1>
       <p className="text-m font-bold mb-2">
         Inspired by Norwegian Singles method{" "}
         <a

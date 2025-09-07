@@ -38,7 +38,7 @@ export default function App() {
 
   // Race / VDOT inputs (Box 1)
   const [raceDistance, setRaceDistance] = useState<number>(10);
-  const [raceTime, setRaceTime] = useState<string>("40:00");
+  const [raceTime, setRaceTime] = useState<string>("00:40:00");
   const [vdot, setVdot] = useState<number | null>(null);
 
   // Numeric paces used for calculations (min/km)
@@ -97,20 +97,46 @@ export default function App() {
     return `${minutes}:${seconds.toString().padStart(2, "0")} min/km`;
   };
 
-  // --- VDOT calculator (simplified placeholder as requested) ---
+  // --- VDOT calculator using Daniels' formula ---
   const calculateVdot = () => {
-    const [minStr, secStr] = raceTime.split(":");
-    const min = parseInt(minStr, 10) || 0;
-    const sec = parseInt(secStr, 10) || 0;
-    const totalMin = min + sec / 60;
+    const parts = raceTime.split(":").map((p) => parseInt(p, 10) || 0);
+    let hours = 0,
+      minutes = 0,
+      seconds = 0;
+    if (parts.length === 3) {
+      [hours, minutes, seconds] = parts;
+    } else if (parts.length === 2) {
+      [minutes, seconds] = parts;
+    } else if (parts.length === 1) {
+      minutes = parts[0];
+    }
+    const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+    const timeMinutes = totalSeconds / 60;
 
-    const v = (raceDistance / totalMin) * 60; // km/h
-    const estVDOT = Math.round(10 + v * 2);
+    const distanceMeters = raceDistance * 1000;
+    const velocity = distanceMeters / timeMinutes; // m/min
 
-    // dummy conversions → could be replaced with Daniels VDOT tables
-    const easyMinPerKm = 7.5 / (v / 10);
-    const subTMinPerKm = 6 / (v / 10);
-    const hiMinPerKm = 5 / (v / 10);
+    const vo2 =
+      -4.6 + 0.182258 * velocity + 0.000104 * velocity * velocity;
+    const vdotVal =
+      vo2 /
+      (0.8 +
+        0.1894393 * Math.exp(-0.012778 * timeMinutes) +
+        0.2989558 * Math.exp(-0.1932605 * timeMinutes));
+    const estVDOT = Math.round(vdotVal);
+
+    const vo2ToPace = (ratio: number): number => {
+      const targetVo2 = vdotVal * ratio;
+      const a = 0.000104;
+      const b = 0.182258;
+      const c = -4.6 - targetVo2;
+      const v = (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a); // m/min
+      return 1000 / v; // min/km
+    };
+
+    const easyMinPerKm = vo2ToPace(0.7);
+    const subTMinPerKm = vo2ToPace(0.88);
+    const hiMinPerKm = vo2ToPace(0.98);
 
     setVdot(estVDOT);
     setPacesNum({
@@ -443,11 +469,12 @@ export default function App() {
           </div>
           <div>
             <label className="block text-sm font-medium">
-              Race time (MM:SS)
+              Race time (HH:MM:SS)
             </label>
             <input
               value={raceTime}
               onChange={(e) => setRaceTime(e.target.value)}
+              placeholder="00:40:00"
               className="mt-1 w-full rounded-md border px-3 py-2 text-sm shadow-sm"
             />
           </div>
